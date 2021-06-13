@@ -1,8 +1,11 @@
 from flask import Flask, request
+from pyasn1_modules.rfc2459 import PrivateDomainName
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import gspread
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from werkzeug.utils import find_modules
 
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -11,17 +14,22 @@ creds = None
 creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-# The ID and range of a sample spreadsheet.
-SAMPLE_SPREADSHEET_ID = 'SPREADSHEET_ID'
+SAMPLE_SPREADSHEET_ID = 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 
 service = build('sheets', 'v4', credentials=creds)
 
 sheet = service.spreadsheets()
 result = sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID,
-                            range="Sheet!A4:A").execute()
+                            range="BillingPhone!A2:A").execute()
 
 values = result.get('values',[])
+
+zip_result = sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID,
+                range="BillingPhone!C2:C").execute()
+
+zip_values = zip_result.get('values',[])
 user_input = [['YES']]
+messagenumber = " "
 
 app = Flask(__name__)
 
@@ -35,57 +43,83 @@ def bot():
     responded = False
 
     if 'hi' in incoming_msg:
-        y='Hi! \nHow can I help you?'
+        y='Hi! We are from FruitBox. \n\nPLEASE ENTER YOUR ZIP CODE !?'
         msg.body(y)
         responded = True
 
-    if 'orders' in incoming_msg:
-        item = 0
-        for item in range(len(values) - 1):
-                y = str(item+1) + ":"  + str(values[item][0].replace("#"," "))       
+    elif incoming_msg.isnumeric():
+        global messagenumber
+
+        if(len(incoming_msg) == 6 ):
+            item = 0        
+            sr_no = 1
+            for item in range(len(values)):
+                if(zip_values[item] == [incoming_msg] ):
+                    pour = str(sr_no) + ":"  + str(values[item][0].replace("#"," "))
+                    messagenumber = messagenumber + pour + "\n"
+                    sr_no += 1 
+            msg.body(messagenumber)
+            responded = True
+
+        elif ["#" + incoming_msg] in values[:]:
+            inda = values[:].index(["#" + incoming_msg]) + 2
+
+            curr_st= sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID,
+                range = "BillingPhone!D" + str(inda)).execute()
+
+            if( 'values' in curr_st):
+                y="Order number already delivered: " + incoming_msg
+                msg.body(y)        
+            else:
+                service.spreadsheets().values().append(spreadsheetId=SAMPLE_SPREADSHEET_ID, 
+                        range="BillingPhone!D"+ str(inda), 
+                        valueInputOption="USER_ENTERED", 
+                        insertDataOption="OVERWRITE", 
+                        body={
+                        "values": user_input
+                    }).execute()
+                y="Order number delivered: " + incoming_msg
                 msg.body(y)
-        responded = True 
+             
+                ACCOUNT_SID = 'XXXXXXXXXXXXXXXXXXXXXXXX' 
+                AUTH_TOKEN = 'XXXXXXXXXXXXXXXXXXXXXXXXX' 
 
-    if 'done' in incoming_msg:
-        print("Entered this block")
-        print(user_input)
-        try:
-            service.spreadsheets().values().append(spreadsheetId=SAMPLE_SPREADSHEET_ID, 
-                range="SHEET!B1:B", 
-                valueInputOption="USER_ENTERED", 
-                insertDataOption="INSERT_ROWS", 
-                body={
-                "values": user_input
-            }).execute()
-        except:
-            print("An error occured")
+                phone_no_list = sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID,
+                    range = "BillingPhone!B" + str(inda)).execute()
+                phone_no = '+91' + phone_no_list.get('values',[])[0][0]
 
-        y="Thank you! Keep up the good work."
-        msg.body(y)
-        responded = True
+                client = Client(ACCOUNT_SID, AUTH_TOKEN)
+                message = client.messages.create( 
+                                    from_='XXXXXXXXXXXXXXXX',  
+                                    body='Your order number ' + incoming_msg + ' has been delivered',      
+                                    to = phone_no
+                                ) 
+                print(message.sid)
+            responded = True
+
+            
+        else:
+            y = "Invalid Order Number"
+            msg.body(y)
+            responded = True
 
 
-    if 'thanks' in incoming_msg:
+    elif 'thanks' in incoming_msg:
         y="Thanks for visiting our store"
         msg.body(y)
         responded = True
 
-    if incoming_msg.isnumeric():
-        service.spreadsheets().values().append(spreadsheetId=SAMPLE_SPREADSHEET_ID, 
-                range="SHEET!A1:A", 
-                valueInputOption="USER_ENTERED", 
-                insertDataOption="INSERT_ROWS", 
-                body={
-                "values": [[incoming_msg]]
-            }).execute()
-        y="Order number delivered: " + incoming_msg
+    else:
+        y = "Invalid input operation."
         msg.body(y)
         responded = True
         
-
     if not responded:
+        y = "invalid response"
         msg.body(y)
     return str(resp)
+    
 
 if __name__ == '__main__':
     app.run(debug=True)
+
